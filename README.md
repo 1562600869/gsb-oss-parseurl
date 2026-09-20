@@ -9,6 +9,74 @@
 
 Parse a URL with memoization.
 
+## 中文说明（关键解析语义）
+
+本库是 [pillarjs/parseurl](https://github.com/pillarjs/parseurl) 的精简版本，
+为 Node.js 请求对象提供带 memoization（缓存）的 URL 解析，无任何运行时依赖。
+
+- **`parseurl(req)` 与 `parseurl.original(req)` 的分工**：`parseurl` 读取并解析
+  `req.url`；`parseurl.original` 优先解析 `req.originalUrl`，仅当它不是字符串时
+  才回落到 `parseurl(req)`（即 `req.url`）。因此在 express 挂载前缀的场景下，
+  `req.url` 被改写为剥掉前缀的路径，也不会影响 original 的解析结果。
+- **`_raw` 判鲜（缓存失效）**：解析结果缓存在 `req._parsedUrl` /
+  `req._parsedOriginalUrl` 上。缓存是否可复用取决于 `parsed._raw === 当前字符串`，
+  而**不是** `parsed.href === url`：同一请求多次调用会复用同一对象；一旦
+  `req.url` 或 `req.originalUrl` 改变，旧缓存立即失效并重新解析（外挂字段如
+  `_token` 也随之消失）。当 url 带 trailing space（如 `'/foo/bar '`）时
+  `url.parse` 产出的 `href` 会剥掉空格、与原始串不等，但仍按 `_raw` 命中缓存。
+- **快路径的 query/search 拆分**：以 `/` 开头的简单路径走快路径
+  `/pathname?query`：`pathname` 不含 `?` 及其之后的内容；`search` 保留前导 `?`
+  （如 `'?a=1'`）；`query` 是去掉前导 `?` 后的串（如 `'a=1'`）；`href` 与 `path`
+  保持原始字符串。一旦出现 `#`（hash）或空白字符，则回落到 Node 核心
+  `url.parse`，以正确剥离 `search` / `query`。
+- **`//` 不会被误当成 auth/host**：快路径只看首字节是否为 `/`，不额外排除第二个
+  `/`。因此 `//todo@txt` 会得到 `pathname === '//todo@txt'`，而不会被
+  `url.parse` 拆成协议相对 URL（那会得到 `pathname: null`）。
+- **`undefined` 入参短路返回 `undefined`**：当 `req.url === undefined`（以及
+  `originalUrl` 与 `req.url` 皆缺）时直接返回 `undefined`，绝不会用 `'/'` 或空串
+  伪造一个根路径对象，调用方据此可靠判断“是否存在 URL”。
+- **绝对 URL**：不以 `/` 开头的字符串（如 `http://localhost:8888/foo/bar`）交给
+  `url.parse`，`host === 'localhost:8888'`、`hostname === 'localhost'`、
+  `port === '8888'` 等字段保持核心解析结果，不做事后改写。
+
+### 测试
+
+```bash
+$ npm test
+```
+
+当前真实输出摘要（`mocha --check-leaks --bail --reporter spec test/`）：
+
+```
+  parseurl(req)
+    ✔ should parse the request URL
+    ✔ should parse with query string
+    ✔ should parse with hash
+    ✔ should parse with query string and hash
+    ✔ should parse a full URL
+    ✔ should not choke on auth-looking URL
+    ✔ should return undefined missing url
+    when using the same request
+      ✔ should parse multiple times
+      ✔ should reflect url changes
+      ✔ should cache parsing
+      ✔ should cache parsing where href does not match
+
+  parseurl.original(req)
+    ✔ should parse the request original URL
+    ✔ should parse originalUrl when different
+    ✔ should parse req.url when originalUrl missing
+    ✔ should return undefined missing req.url and originalUrl
+    when using the same request
+      ✔ should parse multiple times
+      ✔ should reflect changes
+      ✔ should cache parsing
+      ✔ should cache parsing if req.url changes
+      ✔ should cache parsing where href does not match
+
+  20 passing
+```
+
 ## Install
 
 This is a [Node.js](https://nodejs.org/en/) module available through the
