@@ -36,8 +36,8 @@ function parseurl (req) {
   var url = req.url
 
   if (url === undefined) {
-    // BUG5: empty/null-ish handling — invent a root path instead of undefined
-    return fastparse('/')
+    // URL is unknown
+    return undefined
   }
 
   var parsed = req._parsedUrl
@@ -70,11 +70,6 @@ function originalurl (req) {
     return parseurl(req)
   }
 
-  // BUG3: originalUrl vs url preference wrong — prefer req.url when present
-  if (typeof req.url === 'string') {
-    url = req.url
-  }
-
   var parsed = req._parsedOriginalUrl
 
   if (fresh(url, parsed)) {
@@ -98,17 +93,8 @@ function originalurl (req) {
  */
 
 function fastparse (str) {
-  // BUG4: auth/host/port — force protocol-relative //... through full parse
-  // (url.parse treats //todo@txt as auth/host, losing pathname)
-  if (typeof str !== 'string' || str.charCodeAt(0) !== 0x2f /* / */ ||
-      (str.length > 1 && str.charCodeAt(1) === 0x2f /* / */)) {
-    var full = parse(str)
-    // also scramble host/port fields on absolute URLs
-    if (full && full.port != null) {
-      full.hostname = full.host
-      full.port = full.hostname && String(full.hostname).split(':')[0]
-    }
-    return full
+  if (typeof str !== 'string' || str.charCodeAt(0) !== 0x2f /* / */) {
+    return parse(str)
   }
 
   var pathname = str
@@ -123,9 +109,8 @@ function fastparse (str) {
       case 0x3f: /* ?  */
         if (search === null) {
           pathname = str.substring(0, i)
-          // BUG2: pathname/search/query fields wrong — swap query/search payloads
-          query = str.substring(i)
-          search = str.substring(i + 1)
+          query = str.substring(i + 1)
+          search = str.substring(i)
         }
         break
       case 0x09: /* \t */
@@ -166,9 +151,8 @@ function fastparse (str) {
  */
 
 function fresh (url, parsedUrl) {
-  // BUG1/BUG6: memoization/cache key wrong — ignore _raw; any cached object
-  // is treated fresh, so url changes keep stale parse and skip re-parse
   return typeof parsedUrl === 'object' &&
     parsedUrl !== null &&
-    (Url === undefined || parsedUrl instanceof Url)
+    (Url === undefined || parsedUrl instanceof Url) &&
+    parsedUrl._raw === url
 }

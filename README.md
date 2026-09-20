@@ -7,9 +7,9 @@
 [![Build Status][github-actions-ci-image]][github-actions-ci-url]
 [![Test Coverage][coveralls-image]][coveralls-url]
 
-Parse a URL with memoization.
+Parse a URL with memoization. / 带 memoization 缓存的 Node.js 请求 URL 解析小库。
 
-## Install
+## 安装（Install）
 
 This is a [Node.js](https://nodejs.org/en/) module available through the
 [npm registry](https://www.npmjs.com/). Installation is done using the
@@ -25,98 +25,90 @@ $ npm install parseurl
 var parseurl = require('parseurl')
 ```
 
-### parseurl(req)
+## 关键解析语义（中文说明）
 
-Parse the URL of the given request object (looks at the `req.url` property)
-and return the result. The result is the same as `url.parse` in Node.js core.
-Calling this function multiple times on the same `req` where `req.url` does
-not change will return a cached parsed object, rather than parsing again.
+### `parseurl(req)` 与 `parseurl.original(req)` 的分工
 
-### parseurl.original(req)
+- `parseurl(req)` 读取并解析 `req.url`，结果缓存在 `req._parsedUrl` 上。
+- `parseurl.original(req)` 优先解析 `req.originalUrl`（仅当其为字符串时），
+  结果缓存在 `req._parsedOriginalUrl` 上；只有当 `req.originalUrl` 不是字符串时，
+  才回落到 `parseurl(req)`（即解析 `req.url`）。
+- 因此在路由挂载前缀等场景下，`req.url` 的变化绝不会让 `original` 的缓存失效或被改写：
+  `original` 始终以 `req.originalUrl` 为准。
 
-Parse the original URL of the given request object and return the result.
-This works by trying to parse `req.originalUrl` if it is a string, otherwise
-parses `req.url`. The result is the same as `url.parse` in Node.js core.
-Calling this function multiple times on the same `req` where `req.originalUrl`
-does not change will return a cached parsed object, rather than parsing again.
+### `_raw` 判鲜与 memoization
 
-## Benchmark
+- 每次解析后会把原始字符串记录到结果对象的 `_raw` 属性上。
+- 缓存命中条件是：缓存存在、是 `url.Url` 实例（或等价的普通对象外形）**且**
+  `parsed._raw === 当前 url`。不能用 `parsed.href === url` 判鲜——例如
+  `'/foo/bar '`（尾部空格）会回落到完整的 `url.parse`，其 `href` 与原始串不同，
+  但 `_raw` 仍记录原始串，第二次调用必须命中同一个缓存对象。
+- 一旦 `req.url` / `req.originalUrl` 字符串发生变化，`_raw` 对不上就会丢弃旧缓存
+  重新解析并写回（旧对象上外挂的 `_token` 等字段也随之消失）。
 
-```bash
-$ npm run-script bench
+### 快路径（fast path）的 query/search
 
-> parseurl@1.3.3 bench nodejs-parseurl
-> node benchmark/index.js
+- 首字节为 `/` 的字符串走快路径：扫描到第一个 `?` 时，
+  `pathname` 为 `?` 之前的部分；`search` 为含前导 `?` 的子串（如 `'?a=b'`）；
+  `query` 为去掉前导 `?` 后的子串（如 `'a=b'`）；`href` / `path` 保持原始串。
+- 扫描过程中一旦遇到 `#`（hash）或空白/控制字符，则回落到 Node 核心的
+  `url.parse` 做完整解析，以正确剥离 `search` / `query` 并处理 hash。
 
-  http_parser@2.8.0
-  node@10.6.0
-  v8@6.7.288.46-node.13
-  uv@1.21.0
-  zlib@1.2.11
-  ares@1.14.0
-  modules@64
-  nghttp2@1.32.0
-  napi@3
-  openssl@1.1.0h
-  icu@61.1
-  unicode@10.0
-  cldr@33.0
-  tz@2018c
+### `//` 开头的伪 auth URL
 
-> node benchmark/fullurl.js
+- 快路径只要求首字节是 `/`，**不**额外排除第二个字节也是 `/` 的情况。
+  因此 `'//todo@txt'` 不会被 `url.parse` 当成 `//auth@host` 而得到
+  `pathname: null`，而是直接得到 `pathname === '//todo@txt'`。
 
-  Parsing URL "http://localhost:8888/foo/bar?user=tj&pet=fluffy"
+### `undefined` 入参
 
-  4 tests completed.
+- 当 `req.url === undefined` 时，`parseurl(req)` 短路返回 `undefined`，
+  不会用 `'/'` 或空串伪造一个根路径对象，以免调用方误判“存在 URL”。
+- `parseurl.original(req)` 在 `req.originalUrl` 与 `req.url` 均缺失（皆非字符串）时，
+  同样返回 `undefined`。
 
-  fasturl            x 2,207,842 ops/sec ±3.76% (184 runs sampled)
-  nativeurl - legacy x   507,180 ops/sec ±0.82% (191 runs sampled)
-  nativeurl - whatwg x   290,044 ops/sec ±1.96% (189 runs sampled)
-  parseurl           x   488,907 ops/sec ±2.13% (192 runs sampled)
+### 绝对 URL 的 host / hostname / port
 
-> node benchmark/pathquery.js
+- 非 `/` 开头的字符串（如 `'http://localhost:8888/foo/bar'`）交给
+  `url.parse` 完整解析，其 `host === 'localhost:8888'`、
+  `hostname === 'localhost'`、`port === '8888'`，本库不在事后打乱这些字段。
 
-  Parsing URL "/foo/bar?user=tj&pet=fluffy"
+## 测试（Test）
 
-  4 tests completed.
+```sh
+$ npm test
+```
 
-  fasturl            x 3,812,564 ops/sec ±3.15% (188 runs sampled)
-  nativeurl - legacy x 2,651,631 ops/sec ±1.68% (189 runs sampled)
-  nativeurl - whatwg x   161,837 ops/sec ±2.26% (189 runs sampled)
-  parseurl           x 4,166,338 ops/sec ±2.23% (184 runs sampled)
+测试命令为 `mocha --check-leaks --bail --reporter spec test/`。当前仓库实测全绿摘要：
 
-> node benchmark/samerequest.js
+```
+  parseurl(req)
+    ✔ should parse the request URL
+    ✔ should parse with query string
+    ✔ should parse with hash
+    ✔ should parse with query string and hash
+    ✔ should parse a full URL
+    ✔ should not choke on auth-looking URL
+    ✔ should return undefined missing url
+    when using the same request
+      ✔ should parse multiple times
+      ✔ should reflect url changes
+      ✔ should cache parsing
+      ✔ should cache parsing where href does not match
 
-  Parsing URL "/foo/bar?user=tj&pet=fluffy" on same request object
+  parseurl.original(req)
+    ✔ should parse the request original URL
+    ✔ should parse originalUrl when different
+    ✔ should parse req.url when originalUrl missing
+    ✔ should return undefined missing req.url and originalUrl
+    when using the same request
+      ✔ should parse multiple times
+      ✔ should reflect changes
+      ✔ should cache parsing
+      ✔ should cache parsing if req.url changes
+      ✔ should cache parsing where href does not match
 
-  4 tests completed.
-
-  fasturl            x  3,821,651 ops/sec ±2.42% (185 runs sampled)
-  nativeurl - legacy x  2,651,162 ops/sec ±1.90% (187 runs sampled)
-  nativeurl - whatwg x    175,166 ops/sec ±1.44% (188 runs sampled)
-  parseurl           x 14,912,606 ops/sec ±3.59% (183 runs sampled)
-
-> node benchmark/simplepath.js
-
-  Parsing URL "/foo/bar"
-
-  4 tests completed.
-
-  fasturl            x 12,421,765 ops/sec ±2.04% (191 runs sampled)
-  nativeurl - legacy x  7,546,036 ops/sec ±1.41% (188 runs sampled)
-  nativeurl - whatwg x    198,843 ops/sec ±1.83% (189 runs sampled)
-  parseurl           x 24,244,006 ops/sec ±0.51% (194 runs sampled)
-
-> node benchmark/slash.js
-
-  Parsing URL "/"
-
-  4 tests completed.
-
-  fasturl            x 17,159,456 ops/sec ±3.25% (188 runs sampled)
-  nativeurl - legacy x 11,635,097 ops/sec ±3.79% (184 runs sampled)
-  nativeurl - whatwg x    240,693 ops/sec ±0.83% (189 runs sampled)
-  parseurl           x 42,279,067 ops/sec ±0.55% (190 runs sampled)
+  20 passing
 ```
 
 ## License
